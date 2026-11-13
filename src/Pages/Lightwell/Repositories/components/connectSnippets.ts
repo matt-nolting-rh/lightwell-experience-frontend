@@ -314,8 +314,91 @@ default = true`,
   ];
 };
 
+// TODO: add docsUrl to each tab once the JavaScript build tool docs page is published.
+const getNpmSnippetTabs = (repository: RepositoryContext): ConnectSnippetTab[] => {
+  const registryUrl = formatDistributionUrl(repository.published_distribution_url || '');
+  // npm keys per-registry auth on the protocol-less registry URL.
+  const authScope = `${registryUrl.replace(/^https?:/, '').replace(/\/+$/, '')}/`;
+
+  return [
+    {
+      eventKey: 'npm',
+      title: 'npm',
+      snippets: [
+        {
+          label: 'Add credentials to ~/.npmrc:',
+          code: `${authScope}:username=<service_account_username>
+${authScope}:_password=<base64_service_account_token>`,
+          description:
+            'Username format: XXXXXXX|service-account-name. npm requires _password to be base64 encoded.',
+        },
+        {
+          label: 'Set as default registry:',
+          code: `npm config set registry ${registryUrl}`,
+        },
+      ],
+    },
+    {
+      eventKey: 'yarnv1',
+      title: 'Yarn v1 (Classic)',
+      snippets: [
+        {
+          label: 'Add credentials to ~/.npmrc:',
+          code: `${authScope}:_auth=<base64(service_account_username:service_account_token)>
+${authScope}:always-auth=true`,
+          description:
+            'Username format: XXXXXXX|service-account-name. Yarn Classic (1.x) requires _auth to be base64 encoded.',
+        },
+      ],
+    },
+    {
+      eventKey: 'yarnv2',
+      title: 'Yarn v2+ (Berry)',
+      snippets: [
+        {
+          label: 'Add credentials and registry to .yarnrc.yml:',
+          code: `npmRegistryServer: "${registryUrl}"
+npmAlwaysAuth: true
+npmAuthIdent: "<service_account_username>:<service_account_token>"`,
+          description:
+            'Username format: XXXXXXX|service-account-name. Yarn encodes npmAuthIdent itself, so the token is not base64 encoded. Yarn Classic (1.x) reads ~/.npmrc instead — use the npm tab.',
+        },
+      ],
+    },
+    {
+      eventKey: 'artifactory',
+      title: 'Artifactory',
+      snippets: [
+        {
+          label: 'Configure as a remote npm repository:',
+          code: registryUrl || '',
+          urlOnly: true,
+          description:
+            'Set as the remote URL in Artifactory. Configure basic authentication with your service account credentials.',
+        },
+      ],
+    },
+    {
+      eventKey: 'nexus',
+      title: 'Nexus',
+      snippets: [
+        {
+          label: 'Configure as an npm proxy repository:',
+          code: registryUrl || '',
+          urlOnly: true,
+          description:
+            'Set as the remote URL in Nexus. Authentication uses mTLS client certificates.',
+        },
+      ],
+    },
+  ];
+};
+
 export const getConnectSnippetTabs = (repository: RepositoryContext): ConnectSnippetTab[] => {
   const contentType = repository.content_type;
+  if (contentType === 'npm') {
+    return getNpmSnippetTabs(repository);
+  }
 
   if (contentType === 'maven') {
     return getMavenSnippetTabs(repository);

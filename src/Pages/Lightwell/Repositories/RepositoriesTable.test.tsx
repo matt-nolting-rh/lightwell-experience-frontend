@@ -77,6 +77,14 @@ const javaPredisclosureContentItem: ContentItem = {
   version_count: 18,
 };
 
+const npmValidatedContentItem: ContentItem = {
+  ...defaultLightwellContentItem,
+  name: 'lightwell/npm/validated',
+  published_distribution_url: 'https://example.com/lightwell/npm/validated',
+  uuid: '3875c35b-a67a-4ac2-a989-21139433c180',
+  content_type: 'npm',
+};
+
 const renderRepositoriesTable = () =>
   render(
     <ReactQueryTestWrapper>
@@ -206,6 +214,58 @@ it('renders python validated repository with python ecosystem label', async () =
     ),
   ).toBeInTheDocument();
   expect(screen.getByText('Python')).toBeInTheDocument();
+});
+
+it('shows a Technology Preview label only on JavaScript repositories', async () => {
+  (useContentListQuery as jest.Mock).mockImplementation(() => ({
+    isLoading: false,
+    data: {
+      data: [
+        defaultLightwellContentItem,
+        defaultPythonValidatedContentItem,
+        npmValidatedContentItem,
+      ],
+      meta: { count: 3, limit: 20, offset: 0 },
+    },
+  }));
+
+  renderRepositoriesTable();
+
+  const npmRow = (await screen.findByRole('button', { name: 'JavaScript Validated' })).closest(
+    'tr',
+  ) as HTMLElement;
+  expect(within(npmRow).getByText('Technology Preview')).toBeInTheDocument();
+
+  const javaRow = screen.getByText('Java Validated').closest('tr') as HTMLElement;
+  const pythonRow = screen.getByText('Python Validated').closest('tr') as HTMLElement;
+  expect(within(javaRow).queryByText('Technology Preview')).not.toBeInTheDocument();
+  expect(within(pythonRow).queryByText('Technology Preview')).not.toBeInTheDocument();
+});
+
+it('opens the Technology Preview popover when the label is clicked', async () => {
+  const user = userEvent.setup();
+  (useContentListQuery as jest.Mock).mockImplementation(() => ({
+    isLoading: false,
+    data: {
+      data: [npmValidatedContentItem],
+      meta: { count: 1, limit: 20, offset: 0 },
+    },
+  }));
+
+  renderRepositoriesTable();
+
+  await user.click(await screen.findByRole('button', { name: 'Technology Preview' }));
+
+  expect(await screen.findByText('Technology Preview repository')).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      'Some packages may be removed or rebuilt. More packages will be added over time.',
+    ),
+  ).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Learn more/ })).toHaveAttribute(
+    'href',
+    'https://access.redhat.com/support/offerings/techpreview',
+  );
 });
 
 it('renders connect action for each repository', async () => {
@@ -579,4 +639,67 @@ it('registers breadcrumbs with Chrome via useRemoteHook', async () => {
       { dropLastChromeSegment: true },
     ],
   });
+});
+
+it('shows JavaScript Validated and navigates to its packages', async () => {
+  (useContentListQuery as jest.Mock).mockReturnValue({
+    data: {
+      data: [
+        {
+          ...defaultLightwellContentItem,
+          name: 'lightwell/javascript/validated',
+          content_type: 'npm',
+          security_level: 'validated',
+        },
+      ],
+      meta: { count: 1 },
+    },
+  });
+  renderRepositoriesTable();
+  await userEvent.click(await screen.findByRole('button', { name: 'JavaScript Validated' }));
+  expect(mockNavigateTo).toHaveBeenCalledWith(
+    'repositoryPackages',
+    expect.objectContaining({ repoSlug: 'javascript-validated' }),
+  );
+});
+
+it('orders ecosystems Java, Python, JavaScript and tiers within each', async () => {
+  const repo = (content_type: string, ecosystem: string, security_level: string) => ({
+    ...defaultLightwellContentItem,
+    uuid: `${ecosystem}-${security_level}`,
+    content_type,
+    security_level,
+    name: `lightwell/${ecosystem}/${security_level}`,
+  });
+  (useContentListQuery as jest.Mock).mockReturnValue({
+    data: {
+      // The backend serves JavaScript validated only, so no other npm tier appears here.
+      data: [
+        repo('npm', 'javascript', 'validated'),
+        repo('python', 'python', 'remediated'),
+        repo('maven', 'java', 'remediated'),
+        repo('python', 'python', 'validated'),
+        repo('python', 'python', 'predisclosure'),
+        repo('maven', 'java', 'predisclosure'),
+        repo('maven', 'java', 'validated'),
+      ],
+      meta: { count: 7 },
+    },
+  });
+  renderRepositoriesTable();
+  const table = await screen.findByRole('grid', { name: 'Lightwell repositories table' });
+  // "JavaScript ..." also matches /^Java/, so the filter keeps all three ecosystems.
+  const names = within(table)
+    .getAllByRole('button')
+    .map((button) => button.textContent)
+    .filter((name) => /^(Java|Python)/.test(name ?? ''));
+  expect(names).toEqual([
+    'Java Predisclosure',
+    'Java Remediated',
+    'Java Validated',
+    'Python Predisclosure',
+    'Python Remediated',
+    'Python Validated',
+    'JavaScript Validated',
+  ]);
 });

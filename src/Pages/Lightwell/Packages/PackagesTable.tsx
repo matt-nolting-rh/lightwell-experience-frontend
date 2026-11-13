@@ -1,4 +1,5 @@
 import {
+  AlertActionCloseButton,
   Flex,
   Grid,
   Pagination,
@@ -47,9 +48,18 @@ import {
   getEcosystemIcon,
   getRepositoryDescription,
   hasBackportedFixes,
+  toLightwellEcosystem,
+  isTechPreviewContentType,
 } from '../helpers';
 import Hide from 'components/Hide/Hide';
-import { LIGHTWELL_USE_MOCK, lightwellPkgsPerPageKey } from '../constants';
+import {
+  LIGHTWELL_USE_MOCK,
+  lightwellPkgsPerPageKey,
+  TECH_PREVIEW_DESCRIPTION,
+  TECH_PREVIEW_LABEL_TEXT,
+  TECH_PREVIEW_TITLE,
+} from '../constants';
+import { techPreviewLearnMoreLink, techPreviewPopoverContent } from '../techPreview';
 import EmptyTableState from 'components/EmptyTableState/EmptyTableState';
 import Loader from 'components/Loader';
 import LightwellNotFound from '../components/LightwellNotFound';
@@ -61,6 +71,7 @@ import {
   compareReleasesDesc,
   pythonLightwellRelease,
   sortVersionsDesc,
+  sortNpmVersionsDesc,
   stripLightwellVersionSuffix,
   toLightwellRelease,
 } from './utils/versions';
@@ -80,7 +91,8 @@ import {
   PageChromeSlots,
   PageTitleStack,
 } from 'kit/components/assemblies';
-import { LwAlert, LwButton, LwCard, LwClipboardCopy } from 'kit/components/primitives';
+import { LwAlert, LwButton, LwCard, LwClipboardCopy, LwLabel } from 'kit/components/primitives';
+import { useTechPreviewAlertDismissal } from './hooks/useTechPreviewAlertDismissal';
 
 const useStyles = createUseStyles({
   filterToolbarItem: {
@@ -113,6 +125,7 @@ type PackageColumnHeader = {
 const mapRepositoryPackage = (
   pkg: RepositoryPackageItem,
   isPythonWithFixes: boolean,
+  isNpm: boolean,
 ): MappedPackage => {
   const latestCreatedAt = pkg.latest_releases
     .map((release) => release.created_at)
@@ -138,14 +151,18 @@ const mapRepositoryPackage = (
     return true;
   });
 
-  const sortedVersions =
-    latestReleasePerVersion.length > 0
-      ? latestReleasePerVersion.map((release) => release.version)
-      : sortVersionsDesc(
-          isPythonWithFixes
-            ? [...new Set(pkg.versions.map(stripLightwellVersionSuffix))]
-            : pkg.versions,
-        );
+  const releaseVersions = latestReleasePerVersion.map((release) => release.version);
+  const rawVersions = isPythonWithFixes
+    ? [...new Set(pkg.versions.map(stripLightwellVersionSuffix))]
+    : pkg.versions;
+
+  // npm ranks by SemVer precedence. Maven and Python keep release order when releases
+  // exist, and fall back to the dotted-numeric comparator when they do not.
+  const sortedVersions = isNpm
+    ? sortNpmVersionsDesc(releaseVersions.length > 0 ? releaseVersions : rawVersions)
+    : releaseVersions.length > 0
+      ? releaseVersions
+      : sortVersionsDesc(rawVersions);
 
   return {
     group_id: pkg.group,
@@ -251,6 +268,9 @@ const PackagesTable = () => {
     error,
   } = useLightwellRepository(repoSlug);
 
+  const isTechPreviewRepository = isTechPreviewContentType(repository?.content_type);
+  const techPreviewAlert = useTechPreviewAlertDismissal(isTechPreviewRepository);
+
   const apiPackagesQuery = useLightwellRepositoryPackagesQuery(
     repoUUID,
     page,
@@ -277,17 +297,30 @@ const PackagesTable = () => {
       return {
         packages: mockPackages
           .slice(offset, offset + perPage)
-          .map((pkg) => mapRepositoryPackage(pkg, isPythonWithFixes)),
+          .map((pkg) =>
+            mapRepositoryPackage(pkg, isPythonWithFixes, repository?.content_type === 'npm'),
+          ),
         packageCount: mockPackages.length,
       };
     }
 
     const results = packagesData?.results ?? [];
     return {
-      packages: results.map((pkg) => mapRepositoryPackage(pkg, isPythonWithFixes)),
+      packages: results.map((pkg) =>
+        mapRepositoryPackage(pkg, isPythonWithFixes, repository?.content_type === 'npm'),
+      ),
       packageCount: packagesData?.total ?? 0,
     };
-  }, [useMock, repoUUID, debouncedSearch, page, perPage, packagesData, isPythonWithFixes]);
+  }, [
+    useMock,
+    repoUUID,
+    debouncedSearch,
+    page,
+    perPage,
+    packagesData,
+    isPythonWithFixes,
+    repository?.content_type,
+  ]);
 
   const rootPath = useLightwellRootPath();
   const appBreadcrumbsEnabled = useFlag('platform.chrome.app-breadcrumbs');
@@ -365,7 +398,8 @@ const PackagesTable = () => {
   const isPredisclosure = repository.security_level === 'predisclosure';
   const showReleaseColumn = isRemediated || isPredisclosure;
   const isMaven = repository.content_type === 'maven';
-  const isPython = repository.content_type === 'python';
+  const isNpm = repository.content_type === 'npm';
+  const ecosystem = toLightwellEcosystem(repository.content_type);
 
   const columnHeaders: PackageColumnHeader[] = [
     { title: 'Package', width: 25, sortBy: 'name' },
@@ -414,6 +448,13 @@ const PackagesTable = () => {
             <PageTitleStack
               title={repositoryName}
               icon={getEcosystemIcon(repository?.content_type)}
+              labels={
+                isTechPreviewRepository ? (
+                  <LwLabel status='techPreview' popover={techPreviewPopoverContent}>
+                    {TECH_PREVIEW_LABEL_TEXT}
+                  </LwLabel>
+                ) : undefined
+              }
               description={getRepositoryDescription(
                 repository.content_type,
                 repository.security_level,
@@ -430,6 +471,7 @@ const PackagesTable = () => {
                       repository.published_distribution_url || '',
                     ),
                     content_type: repository.content_type,
+                    security_level: repository.security_level,
                   }}
                 >
                   <LwButton variant='secondary' icon={<CodeIcon />}>
@@ -442,6 +484,16 @@ const PackagesTable = () => {
                     : formatDistributionUrl(repository.published_distribution_url || '')}
                 </LwClipboardCopy>
               </LwButtonGroup>
+              {isTechPreviewRepository && !techPreviewAlert.isDismissed && (
+                <LwAlert
+                  variant='info'
+                  actionClose={<AlertActionCloseButton onClose={techPreviewAlert.dismiss} />}
+                  title={TECH_PREVIEW_TITLE}
+                  actionLinks={techPreviewLearnMoreLink}
+                >
+                  {TECH_PREVIEW_DESCRIPTION}
+                </LwAlert>
+              )}
               {(isRemediated || isPredisclosure) && <LwAlert />}
             </PageChromeSlotFooter>
           </PageChromeSlot>
@@ -454,8 +506,20 @@ const PackagesTable = () => {
             <ToolbarItem className={classes.filterToolbarItem}>
               <SearchInput
                 id='lightwell-package-filter'
-                aria-label={isMaven ? 'Filter by name or group ID' : 'Filter by name'}
-                placeholder={isMaven ? 'Filter by name or group ID' : 'Filter by name'}
+                aria-label={
+                  isMaven
+                    ? 'Filter by name or group ID'
+                    : isNpm
+                      ? 'Filter by name or scope'
+                      : 'Filter by name'
+                }
+                placeholder={
+                  isMaven
+                    ? 'Filter by name or group ID'
+                    : isNpm
+                      ? 'Filter by name or scope'
+                      : 'Filter by name'
+                }
                 value={searchQuery}
                 onChange={(_event, value) => setSearchQuery(value)}
                 onClear={() => setSearchQuery('')}
@@ -514,12 +578,12 @@ const PackagesTable = () => {
                         const packageCoordinate = getPackageCoordinate({
                           name,
                           group: group_id,
-                          isMaven,
+                          ecosystem,
                         });
 
                         const renderCopyLabel = (version: string) => (
                           <PackageCopyLabel
-                            packageCoordinate={{ name, group: group_id, isPython }}
+                            packageCoordinate={{ name, group: group_id, ecosystem }}
                             version={version}
                           />
                         );
@@ -536,7 +600,8 @@ const PackagesTable = () => {
                                   navigateTo('packageDetails', {
                                     repoSlug,
                                     packageName: name,
-                                    groupId: isMaven ? group_id : undefined,
+                                    groupId:
+                                      isMaven || (isNpm && group_id !== '-') ? group_id : undefined,
                                     packagesParams,
                                   })
                                 }
